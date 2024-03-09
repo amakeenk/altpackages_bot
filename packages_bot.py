@@ -27,6 +27,7 @@ RDB_API_URL = "https://rdb.altlinux.org/api"
 QUERY_ACL_NONE = f"{RDB_API_URL}/site/watch_by_maintainer?maintainer_nickname={maintainer_nickname}&by_acl=none"
 QUERY_ACL_BY_NICK_LEADER = f"{RDB_API_URL}/site/watch_by_maintainer?maintainer_nickname={maintainer_nickname}&by_acl=by_nick_leader"
 
+BOT_INSTANCE = telebot.TeleBot(telegram_bot_token)
 
 def run_query_to_rdb(query):
     try:
@@ -68,7 +69,6 @@ def get_packages_list_from_response(response_body):
 
 
 def bot():
-    bot = telebot.TeleBot(telegram_bot_token)
     acl_none_list_response = run_query_to_rdb(QUERY_ACL_NONE)
     acl_by_nick_leader_list_response = run_query_to_rdb(QUERY_ACL_BY_NICK_LEADER)
     if acl_none_list_response[0]:
@@ -97,7 +97,7 @@ def bot():
 Новая версия: {_["new_version"]}
 """
         )
-    bot.send_message(
+    BOT_INSTANCE.send_message(
         telegram_user_id,
         message_to_user,
         parse_mode="html",
@@ -106,6 +106,10 @@ def bot():
 
 
 def main():
+    BOT_INSTANCE.send_message(
+        telegram_user_id,
+        f"Бот запущен. Оповещения будут приходить каждый день в {time_to_watch}.",
+    )
     schedule.every().day.at(time_to_watch).do(bot)
     while True:
         schedule.run_pending()
