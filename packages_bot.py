@@ -4,6 +4,7 @@ import httpx
 import json
 import schedule
 import telebot
+import time
 import toml
 from loguru import logger
 from pathlib import Path
@@ -113,6 +114,7 @@ def main():
     schedule.every().day.at(time_to_watch).do(bot)
     while True:
         schedule.run_pending()
+        time.sleep(1)
 
 
 if __name__ == "__main__":
