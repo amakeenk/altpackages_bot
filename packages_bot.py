@@ -2,6 +2,7 @@
 
 import httpx
 import json
+import schedule
 import telebot
 import toml
 from loguru import logger
@@ -12,6 +13,7 @@ try:
     telegram_bot_token = CONFIG["telegram_bot_token"]
     telegram_user_id = CONFIG["telegram_user_id"]
     maintainer_nickname = CONFIG["maintainer_nickname"]
+    time_to_watch = CONFIG["time_to_watch"]
     ignore_packages = CONFIG["ignore_packages"].split(" ")
 except FileNotFoundError:
     logger.error(f"Config file not found.")
@@ -65,7 +67,7 @@ def get_packages_list_from_response(response_body):
     return packages_list
 
 
-def main():
+def bot():
     bot = telebot.TeleBot(telegram_bot_token)
     acl_none_list_response = run_query_to_rdb(QUERY_ACL_NONE)
     acl_by_nick_leader_list_response = run_query_to_rdb(QUERY_ACL_BY_NICK_LEADER)
@@ -101,6 +103,12 @@ def main():
         parse_mode="html",
         disable_web_page_preview=True,
     )
+
+
+def main():
+    schedule.every().day.at(time_to_watch).do(bot)
+    while True:
+        schedule.run_pending()
 
 
 if __name__ == "__main__":

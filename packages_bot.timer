@@ -1,8 +1,0 @@
-[Unit]
-Description=Watcher for packages telegram bot
-
-[Timer]
-OnCalendar=*-*-* 09:00:00
-
-[Install]
-WantedBy=timers.target

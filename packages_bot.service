@@ -1,6 +1,5 @@
 [Unit]
 Description=Watcher for packages telegram bot
-Wants=packages_bot.timer
 
 [Service]
 Type=simple
