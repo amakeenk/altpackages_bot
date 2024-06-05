@@ -20,7 +20,7 @@ except FileNotFoundError:
     logger.error(f"Config file not found.")
     exit()
 except KeyError as missing_key:
-    logger.error(f"Config file is icorrect: {missing_key} not found.")
+    logger.error(f"Config file is incorrect: {missing_key} not found.")
     exit()
 
 
