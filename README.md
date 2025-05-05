@@ -10,6 +10,7 @@
                 python3-module-schedule \
                 python3-module-loguru
 # make install
+# loginctl enable-linger <user>
 $ cp packages_bot.toml.sample ~/.packages_bot.toml && vim ~/.packages_bot.toml
 $ systemctl enable --now --user packages_bot.service
 $ systemctl status --user packages_bot.service
