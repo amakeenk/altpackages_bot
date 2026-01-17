@@ -3,6 +3,7 @@
 import httpx
 import json
 import schedule
+import semver
 import telebot
 import time
 import toml
@@ -54,6 +55,46 @@ def run_query_to_rdb(query):
         return [False, error]
 
 
+def compare_versions(version1, version2):
+    try:
+        v1 = normalize_version_for_semver(version1)
+        v2 = normalize_version_for_semver(version2)
+
+        if semver.compare(v1, v2) < 0:
+            return -1
+        elif semver.compare(v1, v2) > 0:
+            return 1
+        else:
+            if version1 < version2:
+                return -1
+            elif version1 > version2:
+                return 1
+            else:
+                return 0
+    except:
+        if version1 < version2:
+            return -1
+        elif version1 > version2:
+            return 1
+        else:
+            return 0
+
+def normalize_version_for_semver(version):
+    parts = version.split('.')
+
+    while len(parts) < 3:
+        parts.append('0')
+
+    normalized_parts = []
+    for part in parts[:3]:
+        import re
+        normalized_part = re.sub(r'[^\d]', '', part)
+        if not normalized_part:
+            normalized_part = '0'
+        normalized_parts.append(normalized_part)
+
+    return '.'.join(normalized_parts)
+
 def get_packages_list_from_response(response_body):
     packages_list = []
     for _ in response_body:
@@ -68,26 +109,46 @@ def get_packages_list_from_response(response_body):
         )
     return packages_list
 
+def filter_latest_versions(packages_list):
+    filtered_packages = {}
+
+    for pkg in packages_list:
+        package_name = pkg["package_name"]
+        new_version = pkg["new_version"]
+
+        if package_name not in filtered_packages:
+            filtered_packages[package_name] = pkg
+        else:
+            saved_new_version = filtered_packages[package_name]["new_version"]
+            comparison_result = compare_versions(new_version, saved_new_version)
+
+            if comparison_result > 0:
+                filtered_packages[package_name] = pkg
+
+    return list(filtered_packages.values())
+
 
 def bot():
     acl_none_list_response = run_query_to_rdb(QUERY_ACL_NONE)
     acl_by_nick_leader_list_response = run_query_to_rdb(QUERY_ACL_BY_NICK_LEADER)
-    if acl_none_list_response[0]:
+
+    all_packages = []
+
+    if acl_none_list_response[0] and acl_none_list_response[1] is not None:
         acl_none_list = get_packages_list_from_response(
             acl_none_list_response[1]["packages"]
         )
-    if acl_by_nick_leader_list_response[0]:
+        all_packages.extend(acl_none_list)
+
+    if acl_by_nick_leader_list_response[0] and acl_by_nick_leader_list_response[1] is not None:
         acl_by_nick_leader_list = get_packages_list_from_response(
             acl_by_nick_leader_list_response[1]["packages"]
         )
-    all_packages = list(
-        map(
-            dict,
-            set(
-                map(lambda _: tuple(_.items()), acl_none_list + acl_by_nick_leader_list)
-            ),
-        )
-    )
+        all_packages.extend(acl_by_nick_leader_list)
+
+    # Фильтруем пакеты, оставляя только те с самой новой версией для каждого пакета
+    all_packages = filter_latest_versions(all_packages)
+
     message_to_user = f"Пакеты с устаревшими версиями ({len(all_packages)}):\n"
     for _ in all_packages:
         message_to_user = (

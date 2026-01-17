@@ -8,6 +8,7 @@
                 python3-module-telebot \
                 python3-module-toml \
                 python3-module-schedule \
+                python3-module-semver \
                 python3-module-loguru
 # make install
 # loginctl enable-linger <user>
