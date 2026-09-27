@@ -409,7 +409,7 @@ def build_report_segments(outdated, previous_names=None, error_names=None):
         segments.append(("📦 ", None, None))
         segments.append(("ALT Linux Sisyphus — устаревшие пакеты", "bold", None))
         segments.append(
-            (f"\nМейнтейнер: {maintainer_nickname}\nДата: {now}\nВсего: {len(outdated)}\n", None, None)
+            (f"\nМейнтейнер: {maintainer_nickname}\nДата: {now}\nВсего: {len(outdated)}\n\n", None, None)
         )
         for pkg in outdated:
             pkg_name = pkg.get("pkg_name", pkg["name"])
@@ -448,7 +448,9 @@ def build_report_segments(outdated, previous_names=None, error_names=None):
             segments.append(("Без изменений со вчерашнего дня", "bold", None))
 
     if error_names:
-        segments.append(("\n⚠️ ", None, None))
+        # diff-секция не заканчивается переводом строки — нужен ещё один \n
+        prefix = "\n\n⚠️ " if previous_names else "\n⚠️ "
+        segments.append((prefix, None, None))
         segments.append(
             (f"Не удалось получить версию ({len(error_names)}):", "bold", None)
         )
