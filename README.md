@@ -1,18 +1,32 @@
+# ALT Packages Bot
+
 Телеграм бот, который уведомляет мейнтейнера ALT Linux об устаревших пакетах. \
-Для получения информации о пакетах используется API https://rdb.altlinux.org.
+Бот сканирует спеки мейнтейнера из зеркала https://github.com/altlinux/specs \
+и сверяет версии пакетов с апстримом (GitHub, GitLab, PyPI, crates.io). \
+Отчёт приходит раз в день с diff'ом относительно предыдущего запуска.
 
 ### Установка и настройка
 
 ```bash
-# apt-get install python3-module-httpx \
-                python3-module-telebot \
+# apt-get install python3-module-telebot \
                 python3-module-toml \
                 python3-module-schedule \
-                python3-module-semver \
-                python3-module-loguru
+                python3-module-loguru \
+                git-core
 # make install
 # loginctl enable-linger <user>
 $ cp packages_bot.toml.sample ~/.packages_bot.toml && vim ~/.packages_bot.toml
 $ systemctl enable --now --user packages_bot.service
 $ systemctl status --user packages_bot.service
 ```
+
+### Настройки
+
+- `telegram_bot_token` — токен телеграм бота
+- `telegram_user_id` — id пользователя, которому слать отчёты
+- `maintainer_nickname` — ник мейнтейнера в ALT Linux
+- `time_to_watch` — время ежедневной отправки отчёта (например, `10:00`)
+- `ignore_packages` — список игнорируемых пакетов через пробел
+- `github_token` — опциональный токен GitHub API (снимает rate limit)
+
+Клон спеков и состояние между запусками хранятся в `~/.local/share/packages_bot/`.

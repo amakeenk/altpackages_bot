@@ -1,2 +1,3 @@
 .vscode
 packages_bot.toml
+__pycache__
