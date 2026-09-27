@@ -396,6 +396,9 @@ def build_report_segments(outdated, previous_names=None):
     entity_type: "bold" / "code" / "text_link" (requires url); None = plain.
     """
     segments = []
+    outdated = sorted(
+        outdated, key=lambda x: x.get("pkg_name", x["name"]).lower()
+    )
     now = datetime.now().strftime("%Y-%m-%d")
 
     if not outdated:
@@ -519,7 +522,9 @@ def send_report(outdated, previous_names=None):
 def send_report_chunked(outdated):
     """Chunked sender — used only when the plain report text alone exceeds
     Telegram's message limit (hundreds of outdated packages)."""
-    outdated = sorted(outdated, key=lambda x: x["name"].lower())
+    outdated = sorted(
+        outdated, key=lambda x: x.get("pkg_name", x["name"]).lower()
+    )
     now = datetime.now().strftime("%Y-%m-%d")
 
     if not outdated:
