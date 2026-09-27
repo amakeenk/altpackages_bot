@@ -390,7 +390,7 @@ def _utf16_len(s):
     return len(s.encode("utf-16-le")) // 2
 
 
-def build_report_segments(outdated, previous_names=None):
+def build_report_segments(outdated, previous_names=None, error_names=None):
     """Build the report as (text, entity_type, url) segments.
 
     entity_type: "bold" / "code" / "text_link" (requires url); None = plain.
@@ -447,6 +447,15 @@ def build_report_segments(outdated, previous_names=None):
             segments.append(("\n⚪ ", None, None))
             segments.append(("Без изменений со вчерашнего дня", "bold", None))
 
+    if error_names:
+        segments.append(("\n⚠️ ", None, None))
+        segments.append(
+            (f"Не удалось получить версию ({len(error_names)}):", "bold", None)
+        )
+        for name in sorted(error_names, key=str.lower):
+            segments.append(("\n  ! ", None, None))
+            segments.append((name, "code", None))
+
     return segments
 
 
@@ -501,14 +510,16 @@ def send_message(text, parse_mode="HTML", entities=None):
         return False
 
 
-def send_report(outdated, previous_names=None):
+def send_report(outdated, previous_names=None, error_names=None):
     """Send the report as a single Telegram message.
 
     Link URLs live in message entities rather than in the text, so they don't
     count toward Telegram's 4096-char limit. Only if the plain text itself
     exceeds the limit does it fall back to chunked sending.
     """
-    text, entities = assemble_message(build_report_segments(outdated, previous_names))
+    text, entities = assemble_message(
+        build_report_segments(outdated, previous_names, error_names)
+    )
 
     if _utf16_len(text) <= 4000:
         return send_message(text, entities=entities)
@@ -516,10 +527,10 @@ def send_report(outdated, previous_names=None):
     logger.info(
         f"Report text is {_utf16_len(text)} UTF-16 chars; sending in chunks"
     )
-    return send_report_chunked(outdated)
+    return send_report_chunked(outdated, error_names)
 
 
-def send_report_chunked(outdated):
+def send_report_chunked(outdated, error_names=None):
     """Chunked sender — used only when the plain report text alone exceeds
     Telegram's message limit (hundreds of outdated packages)."""
     outdated = sorted(
@@ -550,6 +561,14 @@ def send_report_chunked(outdated):
         up_link = f'<a href="{up_url}">{up}</a>' if up_url else up
         lines.append(f"• <code>{name}</code>: {alt_link} → {up_link}")
 
+    error_lines = []
+    if error_names:
+        error_lines.append(
+            f"\n⚠️ <b>Не удалось получить версию ({len(error_names)}):</b>"
+        )
+        for name in sorted(error_names, key=str.lower):
+            error_lines.append(f"  ! <code>{name}</code>")
+
     send_message(header)
     chunk = ""
     for line in lines:
@@ -558,8 +577,8 @@ def send_report_chunked(outdated):
             chunk = line + "\n"
         else:
             chunk += line + "\n"
-    if chunk:
-        send_message(chunk)
+    if chunk or error_lines:
+        send_message(chunk + "\n".join(error_lines))
 
     return True
 
@@ -603,7 +622,7 @@ def bot(save_state=True):
     if save_state:
         save_current_state(current_names)
 
-    send_report(outdated, previous_names or None)
+    send_report(outdated, previous_names or None, errors or None)
 
 
 def main():
