@@ -363,24 +363,29 @@ def get_upstream_version(pkg):
     return None, f"unsupported_source:{url or vcs}", None
 
 
-def load_previous_state():
-    """Load previous run outdated package names."""
+def load_previous_state(include_versions=False):
+    """Load previous report names and, optionally, upstream versions."""
     if Path(STATE_FILE).exists():
         try:
             with open(STATE_FILE) as f:
                 data = json.load(f)
-                return set(data.get("outdated", []))
+                names = set(data.get("outdated", []))
+                versions = data.get("upstream_versions", {})
+                return (names, versions) if include_versions else names
         except Exception as e:
             logger.warning(f"Failed to load previous state: {e}")
-    return set()
+    return (set(), {}) if include_versions else set()
 
 
-def save_current_state(outdated_names):
-    """Save current run outdated package names."""
+def save_current_state(outdated_names, upstream_versions=None):
+    """Save reported outdated names and their upstream versions."""
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         with open(STATE_FILE, "w") as f:
-            json.dump({"outdated": sorted(outdated_names)}, f, indent=2)
+            json.dump({
+                "outdated": sorted(outdated_names),
+                "upstream_versions": upstream_versions or {},
+            }, f, indent=2)
     except Exception as e:
         logger.warning(f"Failed to save state: {e}")
 
@@ -425,6 +430,11 @@ def build_report_segments(outdated, previous_names=None, error_names=None):
             )
             segments.append((" → ", None, None))
             segments.append((pkg["upstream_version"], "text_link", pkg.get("upstream_url")))
+            if pkg.get("previous_upstream_version"):
+                segments.append((
+                    f" (в прошлом отчёте: {pkg['previous_upstream_version']})",
+                    None, None,
+                ))
             segments.append(("\n", None, None))
 
     if previous_names:
@@ -443,9 +453,11 @@ def build_report_segments(outdated, previous_names=None, error_names=None):
             for name in removed:
                 segments.append(("\n  − ", None, None))
                 segments.append((name, "code", None))
-        if not added and not removed:
+        if not added and not removed and not any(
+            p.get("previous_upstream_version") for p in outdated
+        ):
             segments.append(("\n⚪ ", None, None))
-            segments.append(("Без изменений со вчерашнего дня", "bold", None))
+            segments.append(("Без изменений с прошлого отчёта", "bold", None))
 
     if error_names:
         # diff-секция не заканчивается переводом строки — нужен ещё один \n
@@ -561,7 +573,12 @@ def send_report_chunked(outdated, error_names=None):
         up_url = pkg.get("upstream_url")
         alt_link = f'<a href="{pkg_url}">{alt}</a>'
         up_link = f'<a href="{up_url}">{up}</a>' if up_url else up
-        lines.append(f"• <code>{name}</code>: {alt_link} → {up_link}")
+        suffix = ""
+        if pkg.get("previous_upstream_version"):
+            previous = (pkg["previous_upstream_version"].replace("&", "&amp;")
+                        .replace("<", "&lt;").replace(">", "&gt;"))
+            suffix = f" (в прошлом отчёте: {previous})"
+        lines.append(f"• <code>{name}</code>: {alt_link} → {up_link}{suffix}")
 
     error_lines = []
     if error_names:
@@ -571,18 +588,18 @@ def send_report_chunked(outdated, error_names=None):
         for name in sorted(error_names, key=str.lower):
             error_lines.append(f"  ! <code>{name}</code>")
 
-    send_message(header)
+    success = send_message(header)
     chunk = ""
     for line in lines:
         if len(chunk) + len(line) + 1 > 4000:
-            send_message(chunk)
+            success = send_message(chunk) and success
             chunk = line + "\n"
         else:
             chunk += line + "\n"
     if chunk or error_lines:
-        send_message(chunk + "\n".join(error_lines))
+        success = send_message(chunk + "\n".join(error_lines)) and success
 
-    return True
+    return success
 
 
 def bot(save_state=True):
@@ -617,14 +634,21 @@ def bot(save_state=True):
     logger.info(f"Errors: {len(errors)}")
 
     # Diff with previous run
-    previous_names = load_previous_state()
+    previous_names, previous_versions = load_previous_state(include_versions=True)
     current_names = {pkg["name"] for pkg in outdated}
+    current_versions = {}
+    for pkg in outdated:
+        key = pkg.get("pkg_name", pkg["name"])
+        current_versions[key] = pkg["upstream_version"]
+        previous = previous_versions.get(key)
+        if previous and previous != pkg["upstream_version"]:
+            pkg["previous_upstream_version"] = previous
 
-    # Save current state for next run
-    if save_state:
-        save_current_state(current_names)
+    sent = send_report(outdated, previous_names or None, errors or None)
 
-    send_report(outdated, previous_names or None, errors or None)
+    # Compare against the last successfully sent report, not an unsent run.
+    if save_state and sent:
+        save_current_state(current_names, current_versions)
 
 
 def main():
