@@ -459,7 +459,8 @@ def build_report_segments(outdated, previous_names=None, error_names=None):
                 segments.append(("\n  + ", None, None))
                 segments.append((name, "code", None))
         if removed:
-            segments.append(("\n🟢 ", None, None))
+            prefix = "\n\n🟢 " if added else "\n🟢 "
+            segments.append((prefix, None, None))
             segments.append((f"Исправлены ({len(removed)}):", "bold", None))
             for name in removed:
                 segments.append(("\n  − ", None, None))
