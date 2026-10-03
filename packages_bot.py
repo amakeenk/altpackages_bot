@@ -25,6 +25,7 @@ try:
     maintainer_nickname = CONFIG["maintainer_nickname"]
     time_to_watch = CONFIG["time_to_watch"]
     ignore_packages = CONFIG["ignore_packages"].split(" ")
+    extra_packages = CONFIG.get("extra_packages", "").split()
     github_token = CONFIG.get("github_token", "")
 except FileNotFoundError:
     logger.error("Config file not found.")
@@ -91,11 +92,20 @@ def update_specs():
 
 
 def get_maintainer_packages():
-    """Get list of packages maintained by maintainer_nickname from specs."""
+    """Get maintainer packages plus explicitly configured source packages."""
     result = run(["grep", "-rl", maintainer_nickname, f"{SPECS_DIR}/"])
-    specs = [p.strip() for p in result.stdout.split("\n") if p.strip().endswith(".spec")]
+    specs = {p.strip() for p in result.stdout.split("\n") if p.strip().endswith(".spec")}
+    requested = set(extra_packages) - set(ignore_packages)
+    found = set()
+    if requested:
+        for spec in Path(SPECS_DIR).glob("*/*/*.spec"):
+            if spec.parent.name in requested:
+                specs.add(str(spec))
+                found.add(spec.parent.name)
+        for name in sorted(requested - found):
+            logger.warning(f"Extra package not found in specs: {name}")
     packages = []
-    for spec in specs:
+    for spec in sorted(specs):
         try:
             with open(spec, encoding="utf-8", errors="ignore") as f:
                 content = f.read()
