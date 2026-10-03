@@ -537,41 +537,40 @@ def send_message(text, parse_mode="HTML", entities=None):
 
 
 def send_report(outdated, previous_names=None, error_names=None):
-    """Send the report as a single Telegram message.
-
-    Link URLs live in message entities rather than in the text, so they don't
-    count toward Telegram's 4096-char limit. Only if the plain text itself
-    exceeds the limit does it fall back to chunked sending.
-    """
+    """Send whole report lines, respecting text and formatting limits."""
     segments = build_report_segments(outdated, previous_names, error_names)
-    text, entities = assemble_message(segments)
+    lines = []
+    line = []
+    for text, entity_type, url in segments:
+        for part in text.splitlines(keepends=True):
+            line.append((part, entity_type, url))
+            if part.endswith("\n"):
+                lines.append(line)
+                line = []
+    if line:
+        lines.append(line)
 
-    # Telegram accepts at most 100 formatting entities per message. Keep a
-    # margin and rebuild offsets for each chunk instead of losing tail markup.
-    if len(entities) > 90:
-        success = True
-        chunk = []
-        for segment in segments:
-            candidate_text, candidate_entities = assemble_message(chunk + [segment])
-            if chunk and (
-                len(candidate_entities) > 90 or _utf16_len(candidate_text) > 4000
-            ):
-                chunk_text, chunk_entities = assemble_message(chunk)
-                success = send_message(chunk_text, entities=chunk_entities) and success
-                chunk = []
-            chunk.append(segment)
-        if chunk:
-            chunk_text, chunk_entities = assemble_message(chunk)
-            success = send_message(chunk_text, entities=chunk_entities) and success
-        return success
+    chunks = []
+    chunk = []
+    for line in lines:
+        line_text, line_entities = assemble_message(line)
+        if _utf16_len(line_text) > 4000 or len(line_entities) > 90:
+            logger.error("Report line exceeds Telegram limits; refusing to split it")
+            return False
+        candidate_text, candidate_entities = assemble_message(chunk + line)
+        if chunk and (
+            len(candidate_entities) > 90 or _utf16_len(candidate_text) > 4000
+        ):
+            chunks.append(assemble_message(chunk))
+            chunk = []
+        chunk.extend(line)
+    if chunk:
+        chunks.append(assemble_message(chunk))
 
-    if _utf16_len(text) <= 4000:
-        return send_message(text, entities=entities)
-
-    logger.info(
-        f"Report text is {_utf16_len(text)} UTF-16 chars; sending in chunks"
-    )
-    return send_report_chunked(outdated, error_names)
+    success = True
+    for text, entities in chunks:
+        success = send_message(text, entities=entities) and success
+    return success
 
 
 def send_report_chunked(outdated, error_names=None):
