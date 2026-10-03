@@ -114,7 +114,9 @@ def get_maintainer_packages():
             url = url_match.group(1).strip() if url_match else ""
             vcs = vcs_match.group(1).strip() if vcs_match else ""
 
-            pkg_name = Path(spec).name.replace(".spec", "")
+            # Mirror directories are named after source packages; spec filenames
+            # and macro-expanded upstream names need not match that identity.
+            pkg_name = Path(spec).parent.name
 
             if pkg_name in ignore_packages:
                 continue
@@ -438,7 +440,7 @@ def build_report_segments(outdated, previous_names=None, error_names=None):
             segments.append(("\n", None, None))
 
     if previous_names:
-        current = {p["name"] for p in outdated}
+        current = {p.get("pkg_name", p["name"]) for p in outdated}
         added = sorted(current - previous_names)
         removed = sorted(previous_names - current)
         if added:
@@ -632,6 +634,7 @@ def bot(save_state=True):
     errors = []
 
     for i, pkg in enumerate(packages):
+        pkg_name = pkg.get("pkg_name", pkg["name"])
         upstream, reason, up_url = get_upstream_version(pkg)
 
         if upstream:
@@ -639,21 +642,24 @@ def bot(save_state=True):
             status = "<red>OUTDATED</>" if is_outdated else "<green>up to date</>"
             logger.opt(colors=True).debug(
                 f"<white>[{i + 1}/{len(packages)}]</white> "
-                f"<blue>{pkg['name']}</blue><white>: "
+                f"<blue>{pkg_name}</blue><white>: "
                 f"ALT: {pkg['alt_version']} | Upstream: {upstream} | </white>" + status
             )
             if is_outdated:
                 outdated.append({**pkg, "upstream_version": upstream, "upstream_url": up_url})
         else:
-            logger.warning(f"{pkg['name']}: could not determine upstream version ({reason})")
-            errors.append(pkg["name"])
+            logger.warning(f"{pkg_name}: could not determine upstream version ({reason})")
+            errors.append(pkg_name)
 
     logger.info(f"Outdated packages: {len(outdated)}")
     logger.info(f"Errors: {len(errors)}")
 
     # Diff with previous run
     previous_names, previous_versions = load_previous_state(include_versions=True)
-    current_names = {pkg["name"] for pkg in outdated}
+    # Migrate names saved by older versions, which used upstream/module names.
+    repository_names = {pkg["name"]: pkg.get("pkg_name", pkg["name"]) for pkg in packages}
+    previous_names = {repository_names.get(name, name) for name in previous_names}
+    current_names = {pkg.get("pkg_name", pkg["name"]) for pkg in outdated}
     current_versions = {}
     for pkg in outdated:
         key = pkg.get("pkg_name", pkg["name"])
