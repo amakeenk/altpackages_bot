@@ -531,9 +531,27 @@ def send_report(outdated, previous_names=None, error_names=None):
     count toward Telegram's 4096-char limit. Only if the plain text itself
     exceeds the limit does it fall back to chunked sending.
     """
-    text, entities = assemble_message(
-        build_report_segments(outdated, previous_names, error_names)
-    )
+    segments = build_report_segments(outdated, previous_names, error_names)
+    text, entities = assemble_message(segments)
+
+    # Telegram accepts at most 100 formatting entities per message. Keep a
+    # margin and rebuild offsets for each chunk instead of losing tail markup.
+    if len(entities) > 90:
+        success = True
+        chunk = []
+        for segment in segments:
+            candidate_text, candidate_entities = assemble_message(chunk + [segment])
+            if chunk and (
+                len(candidate_entities) > 90 or _utf16_len(candidate_text) > 4000
+            ):
+                chunk_text, chunk_entities = assemble_message(chunk)
+                success = send_message(chunk_text, entities=chunk_entities) and success
+                chunk = []
+            chunk.append(segment)
+        if chunk:
+            chunk_text, chunk_entities = assemble_message(chunk)
+            success = send_message(chunk_text, entities=chunk_entities) and success
+        return success
 
     if _utf16_len(text) <= 4000:
         return send_message(text, entities=entities)
