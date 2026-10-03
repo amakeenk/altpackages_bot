@@ -10,7 +10,7 @@ def detection_namespace():
 
     source = Path(__file__).resolve().parents[1] / "packages_bot.py"
     tree = ast.parse(source.read_text())
-    names = {"normalize_version", "version_sort_key", "get_upstream_version"}
+    names = {"normalize_version", "is_prerelease", "version_sort_key", "get_upstream_version"}
     module = ast.Module(
         body=[node for node in tree.body
               if isinstance(node, ast.FunctionDef) and node.name in names],

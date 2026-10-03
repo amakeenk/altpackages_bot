@@ -199,18 +199,35 @@ def normalize_version(v):
     return result
 
 
+def is_prerelease(version):
+    return bool(re.search(
+        r"(?:alpha|beta|rc|pre|dev|nightly|snapshot|canary|wip|\d[ab]\d|(?:^|[.\-_])[ab](?:[.\-_]|\d|$))",
+        version, re.IGNORECASE,
+    ))
+
+
 def version_sort_key(v):
     """Comparable sort key from a version string. None sorts lowest."""
     nv = normalize_version(v)
     if nv is None:
         return (0,)
-    key: list = [1]
+    release = []
+    suffix = []
     for part in nv:
-        if isinstance(part, int):
-            key.append((1, part, ""))
+        if isinstance(part, int) and not suffix:
+            release.append(part)
         else:
-            key.append((0, 0, str(part)))
-    return tuple(key)
+            suffix.append(part)
+    while release and release[-1] == 0:
+        release.pop()
+    stages = {"dev": 0, "alpha": 1, "a": 1, "beta": 2, "b": 2,
+              "pre": 3, "rc": 4}
+    suffix_key = tuple(
+        (1, part, "") if isinstance(part, int)
+        else (0, stages.get(str(part), -1), "" if str(part) in stages else str(part))
+        for part in suffix
+    )
+    return (1, tuple(release), 0 if is_prerelease(v) else 1, suffix_key)
 
 
 def compare_versions(v1, v2):
@@ -219,21 +236,15 @@ def compare_versions(v1, v2):
     nv2 = normalize_version(v2)
     if not nv1 or not nv2:
         return False
-    try:
-        return nv2 > nv1
-    except Exception:
-        return False
+    return version_sort_key(v2) > version_sort_key(v1)
 
 
-def latest_tag_via_git(host, owner, repo):
+def latest_tag_via_git(host, owner, repo, prerelease_only=False, stable_only=False):
     """Get latest tag using git protocol — bypasses API rate limits.
 
     Prefers stable tags; only falls back to pre-release tags (rc/beta/alpha...)
     if no stable tag exists at all.
     """
-    PRERELEASE = re.compile(
-        r"(beta|alpha|rc|pre|dev|nightly|snapshot|canary|wip)", re.IGNORECASE
-    )
     try:
         r = subprocess.run(
             ["git", "ls-remote", "--tags", "--refs", f"https://{host}/{owner}/{repo}.git"],
@@ -253,9 +264,12 @@ def latest_tag_via_git(host, owner, repo):
                     tags.append(tag)
         if not tags:
             return None
-        stable = [t for t in tags if not PRERELEASE.search(t)]
-        pool = stable if stable else tags
-        return max(pool, key=version_sort_key)
+        stable = [t for t in tags if not is_prerelease(t)]
+        if prerelease_only:
+            pool = [t for t in tags if is_prerelease(t)]
+        else:
+            pool = stable if stable or stable_only else tags
+        return max(pool, key=version_sort_key) if pool else None
     except Exception:
         return None
 
@@ -374,6 +388,62 @@ def get_upstream_version(pkg):
     return None, f"unsupported_source:{url or vcs}", None
 
 
+def get_upstream_candidates(pkg):
+    """Return latest stable and prerelease candidates as (version, URL) pairs."""
+    version, reason, url = get_upstream_version(pkg)
+    candidates: dict[str, tuple[str, str | None] | None] = {
+        "stable": None, "prerelease": None,
+    }
+
+    def add(value, link):
+        if not value:
+            return
+        channel = "prerelease" if is_prerelease(value) else "stable"
+        current = candidates[channel]
+        if current is None or version_sort_key(value) > version_sort_key(current[0]):
+            candidates[channel] = (value.lstrip("v"), link)
+
+    add(version, url)
+    package_url = pkg.get("url", "")
+    source = (
+        package_url if any(host in package_url for host in ("pypi.org", "pypi.python.org", "crates.io"))
+        else pkg.get("vcs") or package_url
+    )
+    match = re.search(r"(github\.com|gitlab\.com)/([^/]+)/([^/]+)", source)
+    if match:
+        host, owner, repo = match.groups()
+        repo = repo.removesuffix(".git")
+        for channel in ("stable", "prerelease"):
+            tag = latest_tag_via_git(
+                host, owner, repo, prerelease_only=channel == "prerelease",
+                stable_only=channel == "stable",
+            )
+            if tag:
+                path = "releases/tag" if host == "github.com" else "-/releases"
+                add(tag, f"https://{host}/{owner}/{repo}/{path}/{tag}")
+    elif "pypi.org" in source or "pypi.python.org" in source:
+        name = pkg["name"].replace("python3-module-", "").replace("python-", "")
+        if "/project/" in source:
+            name = source.split("/project/")[-1].rstrip("/")
+        data = fetch_json(f"https://pypi.org/pypi/{name}/json")
+        if isinstance(data, dict):
+            for value, files in data.get("releases", {}).items():
+                if any(not item.get("yanked", False) for item in files):
+                    add(value, f"https://pypi.org/project/{name}/{value}/")
+    elif "crates.io" in source:
+        name = source.split("/crates/")[-1].rstrip("/")
+        data = fetch_json(f"https://crates.io/api/v1/crates/{name}/versions")
+        if isinstance(data, dict):
+            for release in data.get("versions", []):
+                if not release.get("yanked", False):
+                    add(release.get("num"), f"https://crates.io/crates/{name}/{release.get('num')}")
+    stable = candidates["stable"]
+    prerelease = candidates["prerelease"]
+    if stable and prerelease and not compare_versions(stable[0], prerelease[0]):
+        candidates["prerelease"] = None
+    return candidates, reason
+
+
 def load_previous_state(include_versions=False):
     """Load previous report names and, optionally, upstream versions."""
     if Path(STATE_FILE).exists():
@@ -440,7 +510,12 @@ def build_report_segments(outdated, previous_names=None, error_names=None):
                 )
             )
             segments.append((" → ", None, None))
+            if pkg.get("upstream_prerelease"):
+                segments.append(("prerelease: ", None, None))
             segments.append((pkg["upstream_version"], "text_link", pkg.get("upstream_url")))
+            if pkg.get("prerelease_version"):
+                segments.append(("; prerelease: ", None, None))
+                segments.append((pkg["prerelease_version"], "text_link", pkg.get("prerelease_url")))
             if pkg.get("previous_upstream_version"):
                 segments.append((
                     f" (в прошлом отчёте: {pkg['previous_upstream_version']})",
@@ -631,6 +706,19 @@ def send_report_chunked(outdated, error_names=None):
     return success
 
 
+def format_upstream_candidates(candidates, alt_version):
+    """Keep older channels out of logs; retain equal versions for context."""
+    return " | ".join(
+        f"{channel}: {candidate[0]}" for channel, candidate in candidates.items()
+        if candidate and version_sort_key(candidate[0]) >= version_sort_key(alt_version)
+        and (channel != "prerelease" or (
+            compare_versions(alt_version, candidate[0])
+            and (not candidates.get("stable")
+                 or compare_versions(candidates["stable"][0], candidate[0]))
+        ))
+    ) or "нет версий новее ALT"
+
+
 def bot(save_state=True):
     logger.info("Updating specs repository...")
     update_specs()
@@ -644,18 +732,31 @@ def bot(save_state=True):
 
     for i, pkg in enumerate(packages):
         pkg_name = pkg.get("pkg_name", pkg["name"])
-        upstream, reason, up_url = get_upstream_version(pkg)
+        candidates, reason = get_upstream_candidates(pkg)
+        newer = {
+            channel: candidate for channel, candidate in candidates.items()
+            if candidate and compare_versions(pkg["alt_version"], candidate[0])
+        }
+        primary = newer.get("stable") or newer.get("prerelease")
+        detected = candidates.get("stable") or candidates.get("prerelease")
+        upstream, up_url = primary or detected or (None, None)
 
         if upstream:
-            is_outdated = compare_versions(pkg["alt_version"], upstream)
+            is_outdated = bool(newer)
             status = "<red>OUTDATED</>" if is_outdated else "<green>up to date</>"
+            upstream_display = format_upstream_candidates(candidates, pkg["alt_version"])
             logger.opt(colors=True).debug(
                 f"<white>[{i + 1}/{len(packages)}]</white> "
                 f"<blue>{pkg_name}</blue><white>: "
-                f"ALT: {pkg['alt_version']} | Upstream: {upstream} | </white>" + status
+                f"ALT: {pkg['alt_version']} | Upstream: {upstream_display} | </white>" + status
             )
             if is_outdated:
-                outdated.append({**pkg, "upstream_version": upstream, "upstream_url": up_url})
+                entry = {**pkg, "upstream_version": upstream, "upstream_url": up_url,
+                         "upstream_prerelease": not bool(newer.get("stable"))}
+                prerelease = newer.get("prerelease")
+                if newer.get("stable") and prerelease:
+                    entry["prerelease_version"], entry["prerelease_url"] = prerelease
+                outdated.append(entry)
         else:
             logger.warning(f"{pkg_name}: could not determine upstream version ({reason})")
             errors.append(pkg_name)
@@ -672,9 +773,11 @@ def bot(save_state=True):
     current_versions = {}
     for pkg in outdated:
         key = pkg.get("pkg_name", pkg["name"])
-        current_versions[key] = pkg["upstream_version"]
+        current_versions[key] = pkg["upstream_version"] + (
+            f"; prerelease: {pkg['prerelease_version']}" if pkg.get("prerelease_version") else ""
+        )
         previous = previous_versions.get(key)
-        if previous and previous != pkg["upstream_version"]:
+        if previous and previous != current_versions[key]:
             pkg["previous_upstream_version"] = previous
 
     sent = send_report(outdated, previous_names or None, errors or None)

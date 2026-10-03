@@ -24,7 +24,8 @@ class ReportChunkingTests(unittest.TestCase):
                 packages = [
                     {"name": f"pkg-{i:03d}-" + "x" * name_length,
                      "alt_version": "1.0", "upstream_version": "2.0",
-                     "upstream_url": "https://example.org", "previous_upstream_version": "1.5"}
+                     "upstream_url": "https://example.org", "previous_upstream_version": "1.5",
+                     "prerelease_version": "3.0-beta.1", "prerelease_url": "https://example.org/beta"}
                     for i in range(count)
                 ]
                 segments = ns["build_report_segments"](packages, {"old"}, {"error"})
@@ -42,7 +43,8 @@ class ReportChunkingTests(unittest.TestCase):
                         self.assertLessEqual(entity["offset"] + entity["length"],
                                              ns["_utf16_len"](text))
                 for package in packages:
-                    row = f"• {package['name']}: 1.0 → 2.0 (в прошлом отчёте: 1.5)\n"
+                    row = (f"• {package['name']}: 1.0 → 2.0; prerelease: 3.0-beta.1"
+                           " (в прошлом отчёте: 1.5)\n")
                     self.assertEqual(sum(row in message for message in messages), 1)
 
 
