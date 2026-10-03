@@ -319,17 +319,16 @@ def get_upstream_version(pkg):
             headers = {"User-Agent": "altlinux-outdated-checker"}
             if github_token:
                 headers["Authorization"] = f"token {github_token}"
-            # Try releases API first (precise, but rate-limited)
+            # Compare the API release with tags: /latest may lag behind tags.
             data = fetch_json(
                 f"https://api.github.com/repos/{owner}/{repo}/releases/latest",
                 headers=headers,
             )
-            if data and "tag_name" in data:
-                tag = data["tag_name"]
-                return tag.lstrip("v"), None, f"https://github.com/{owner}/{repo}/releases/tag/{tag}"
-            # Fallback: tags via git protocol (no API rate limit)
-            tag = latest_tag_via_git("github.com", owner, repo)
-            if tag:
+            release_tag = data.get("tag_name") if isinstance(data, dict) else None
+            git_tag = latest_tag_via_git("github.com", owner, repo)
+            candidates = [t for t in (release_tag, git_tag) if t]
+            if candidates:
+                tag = max(candidates, key=version_sort_key)
                 return tag.lstrip("v"), None, f"https://github.com/{owner}/{repo}/releases/tag/{tag}"
             # Fallback: latest commit date (packages versioned by date)
             date = latest_commit_date_via_api(owner, repo, headers)
@@ -346,14 +345,14 @@ def get_upstream_version(pkg):
             owner, repo = match.group(1), match.group(2).replace(".git", "").rstrip("/")
             # Try releases API first
             data = fetch_json(f"https://gitlab.com/api/v4/projects/{owner}%2F{repo}/releases")
-            if data and isinstance(data, list) and len(data) > 0:
-                tag = data[0].get("tag_name", "")
-                return tag.lstrip("v"), None, f"https://gitlab.com/{owner}/{repo}/-/releases/{tag}"
-            if data and isinstance(data, dict) and "message" in data:
-                return None, f"gitlab_api:{str(data['message'])[:60]}", None
-            # Fallback: tags via git protocol (no API rate limit)
-            tag = latest_tag_via_git("gitlab.com", owner, repo)
-            if tag:
+            release_tags = (
+                [release.get("tag_name") for release in data if isinstance(release, dict)]
+                if isinstance(data, list) else []
+            )
+            git_tag = latest_tag_via_git("gitlab.com", owner, repo)
+            candidates = [t for t in (*release_tags, git_tag) if t]
+            if candidates:
+                tag = max(candidates, key=version_sort_key)
                 return tag.lstrip("v"), None, f"https://gitlab.com/{owner}/{repo}/-/releases/{tag}"
             # Fallback: latest commit date (packages versioned by date)
             date = latest_commit_date_via_api(owner, repo, {}, host="gitlab.com")
