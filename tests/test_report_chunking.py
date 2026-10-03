@@ -10,7 +10,7 @@ class ReportChunkingTests(unittest.TestCase):
     def test_whole_lines_for_both_limits(self):
         source = Path(__file__).resolve().parents[1] / "packages_bot.py"
         tree = ast.parse(source.read_text())
-        names = {"_utf16_len", "build_report_segments", "assemble_message", "send_report"}
+        names = {"_utf16_len", "build_report_segments", "assemble_message", "send_report", "send_segments"}
         module = ast.Module(body=[
             node for node in tree.body
             if isinstance(node, ast.FunctionDef) and node.name in names

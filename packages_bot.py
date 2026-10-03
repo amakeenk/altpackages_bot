@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -38,6 +39,8 @@ DATA_DIR = Path.home() / ".local/share/packages_bot"
 SPECS_DIR = str(DATA_DIR / "specs")
 STATE_FILE = str(DATA_DIR / "prev-outdated.json")
 SPECS_REMOTE = "https://github.com/altlinux/specs.git"
+BEEHIVE_BASE = "https://git.altlinux.org/beehive"
+BEEHIVE_TARGET = "Sisyphus-x86_64"
 
 BOT_INSTANCE = telebot.TeleBot(telegram_bot_token)
 
@@ -613,7 +616,11 @@ def send_message(text, parse_mode="HTML", entities=None):
 
 def send_report(outdated, previous_names=None, error_names=None):
     """Send whole report lines, respecting text and formatting limits."""
-    segments = build_report_segments(outdated, previous_names, error_names)
+    return send_segments(build_report_segments(outdated, previous_names, error_names))
+
+
+def send_segments(segments):
+    """Send formatted segments without splitting lines between messages."""
     lines = []
     line = []
     for text, entity_type, url in segments:
@@ -706,6 +713,62 @@ def send_report_chunked(outdated, error_names=None):
     return success
 
 
+def parse_ftbfs(text, nickname):
+    """Select source packages by exact membership in the Beehive ACL."""
+    packages = {}
+    for line in text.splitlines():
+        fields = line.split("\t")
+        if len(fields) != 4:
+            if line.strip():
+                raise ValueError("Unexpected Beehive statistics row")
+            continue
+        name, version, _, acl = (field.strip() for field in fields)
+        if not name or not version:
+            raise ValueError("Missing package name or version in Beehive statistics")
+        if nickname and nickname in {member.strip() for member in acl.split(",")}:
+            log_name = urllib.parse.quote(f"{name}-{version}", safe="")
+            packages[name] = {
+                "name": name, "version": version,
+                "log_url": f"{BEEHIVE_BASE}/logs/{BEEHIVE_TARGET}/latest/error/{log_name}",
+            }
+    return sorted(packages.values(), key=lambda pkg: pkg["name"].lower())
+
+
+def get_ftbfs_packages():
+    """Return maintainer's FTBFS packages, or None on fetch/parse failure."""
+    url = f"{BEEHIVE_BASE}/stats/{BEEHIVE_TARGET}/ftbfs-joined"
+    try:
+        # URL is built exclusively from fixed HTTPS Beehive constants.
+        request = urllib.request.Request(url, headers={"User-Agent": "altlinux-packages-bot"})  # noqa: S310
+        with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
+            text = response.read().decode("utf-8")
+        return parse_ftbfs(text, maintainer_nickname)
+    except (OSError, UnicodeError, ValueError) as error:
+        logger.warning(f"Could not fetch Beehive FTBFS statistics: {error}")
+        return None
+
+
+def send_ftbfs_report(packages):
+    """Send a separate Beehive report with links to failed build logs."""
+    now = datetime.now().strftime("%Y-%m-%d")
+    segments = [
+        ("🔨 ", None, None),
+        (f"ALT Linux {BEEHIVE_TARGET} — непересобирающиеся пакеты", "bold", None),
+        (f"\nМейнтейнер: {maintainer_nickname}\nДата: {now}\nВсего: {len(packages)}\n\n", None, None),
+    ]
+    if not packages:
+        segments.append(("✅ Непересобирающихся пакетов нет", None, None))
+    for pkg in packages:
+        segments.extend([
+            ("• ", None, None),
+            (f"{pkg['name']}-{pkg['version']}", "text_link",
+             f"https://packages.altlinux.org/ru/sisyphus/srpms/{urllib.parse.quote(pkg['name'], safe='')}/"),
+            (" — ", None, None),
+            ("лог сборки", "text_link", pkg["log_url"]), ("\n", None, None),
+        ])
+    return send_segments(segments)
+
+
 def format_upstream_candidates(candidates, alt_version):
     """Keep older channels out of logs; retain equal versions for context."""
     return " | ".join(
@@ -782,6 +845,11 @@ def bot(save_state=True):
 
     sent = send_report(outdated, previous_names or None, errors or None)
 
+    logger.info("Fetching Beehive FTBFS statistics...")
+    ftbfs = get_ftbfs_packages()
+    if ftbfs is not None:
+        send_ftbfs_report(ftbfs)
+
     # Compare against the last successfully sent report, not an unsent run.
     if save_state and sent:
         save_current_state(current_names, current_versions)
@@ -801,7 +869,18 @@ def main():
         action="store_true",
         help="do not overwrite the saved state (diff history stays intact)",
     )
+    parser.add_argument(
+        "--ftbfs",
+        action="store_true",
+        help="check only Beehive FTBFS, send the report and exit",
+    )
     args = parser.parse_args()
+
+    if args.ftbfs:
+        packages = get_ftbfs_packages()
+        if packages is None or not send_ftbfs_report(packages):
+            sys.exit(1)
+        return
 
     if args.now:
         bot(save_state=not args.no_save)
