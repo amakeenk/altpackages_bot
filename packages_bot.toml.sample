@@ -5,3 +5,7 @@ ignore_packages = ""
 extra_packages = ""
 time_to_watch = ""
 github_token = ""
+
+# Optional source manifest paths for projects without releases/tags.
+[version_files]
+# activitywatch-server-rust = "aw-server/Cargo.toml"

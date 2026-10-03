@@ -1,6 +1,8 @@
 #!/usr/bin/python3
 
 import argparse
+import base64
+import configparser
 import json
 import os
 import re
@@ -28,6 +30,7 @@ try:
     ignore_packages = CONFIG["ignore_packages"].split(" ")
     extra_packages = CONFIG.get("extra_packages", "").split()
     github_token = CONFIG.get("github_token", "")
+    version_files = CONFIG.get("version_files", {})
 except FileNotFoundError:
     logger.error("Config file not found.")
     exit()
@@ -307,6 +310,117 @@ def latest_commit_date_via_api(owner, repo, headers, host="github.com"):
     return None
 
 
+def is_date_version(version):
+    match = re.fullmatch(r"(\d{4})[.-]?(\d{2})[.-]?(\d{2})", version)
+    if not match:
+        return False
+    try:
+        datetime.strptime("".join(match.groups()), "%Y%m%d")
+        return True
+    except ValueError:
+        return False
+
+
+def source_manifest(text, path, workspace_version=None):
+    """Read literal project metadata only; never execute upstream code."""
+    if path.endswith("package.json"):
+        try:
+            data = json.loads(text)
+        except ValueError:
+            return None, None, []
+        return data.get("name"), data.get("version"), []
+    if path.endswith("setup.cfg"):
+        parser = configparser.ConfigParser(interpolation=None)
+        parser.read_string(text)
+        return parser.get("metadata", "name", fallback=None), parser.get("metadata", "version", fallback=None), []
+    data = toml.loads(text)
+    if path.endswith("Cargo.toml"):
+        package = data.get("package", {})
+        workspace = data.get("workspace", {})
+        version = package.get("version")
+        if isinstance(version, dict) and version.get("workspace"):
+            version = workspace_version
+        return package.get("name"), version, workspace.get("members", [])
+    project = data.get("project") or data.get("tool", {}).get("poetry", {})
+    return project.get("name"), project.get("version"), []
+
+
+def source_version(pkg, host, owner, repo, headers):
+    """Inspect root manifests and unambiguous matching Cargo workspace members."""
+    explicit = version_files.get(pkg.get("pkg_name", pkg["name"]))
+    paths = [explicit] if explicit else ["Cargo.toml", "pyproject.toml", "package.json", "setup.cfg"]
+    matches = []
+    identities = {pkg["name"].lower().replace("_", "-"), repo.lower().removesuffix("-rust")}
+
+    def read_manifest(path):
+        if not isinstance(path, str) or path.startswith("/") or ".." in path.split("/"):
+            return None
+        encoded = urllib.parse.quote(path, safe="")
+        if host == "github.com":
+            api = f"https://api.github.com/repos/{owner}/{repo}/contents/{encoded}"
+        else:
+            project = urllib.parse.quote(f"{owner}/{repo}", safe="")
+            api = f"https://gitlab.com/api/v4/projects/{project}/repository/files/{encoded}?ref=HEAD"
+        data = fetch_json(api, headers=headers)
+        if not isinstance(data, dict) or data.get("encoding") != "base64":
+            return None
+        content = data.get("content", "")
+        if len(content) > 150000:
+            return None
+        text = base64.b64decode(content).decode("utf-8")
+        link = data.get("html_url") or f"https://{host}/{owner}/{repo}/-/blob/HEAD/{urllib.parse.quote(path, safe='/')}"
+        return text, link
+
+    def add(name, version, link, selected=False):
+        if (
+            isinstance(version, str)
+            and re.fullmatch(r"v?\d+(?:[.\-_][0-9A-Za-z]+)*(?:\+[0-9A-Za-z.-]+)?", version)
+            and (selected or (name and name.lower().replace("_", "-") in identities))
+        ):
+            matches.append((version.lstrip("v"), link))
+
+    try:
+        for path in paths:
+            content = read_manifest(path)
+            if content is None:
+                continue
+            text, link = content
+            name, version, members = source_manifest(text, path)
+            add(name, version, link, selected=bool(explicit) or not members)
+            if not explicit and path == "Cargo.toml" and isinstance(members, list):
+                workspace_version = toml.loads(text).get("workspace", {}).get("package", {}).get("version")
+                for member in members[:20]:
+                    if not isinstance(member, str) or "*" in member:
+                        continue
+                    member_path = member.rstrip("/") + "/Cargo.toml"
+                    content = read_manifest(member_path)
+                    if content:
+                        name, version, _ = source_manifest(content[0], member_path, workspace_version)
+                        add(name, version, content[1])
+        versions = {version for version, _ in matches}
+        if len(versions) == 1:
+            return matches[0]
+    except (ValueError, TypeError, UnicodeError, configparser.Error) as error:
+        logger.debug(f"Could not read upstream source version for {repo}: {error}")
+    return None
+
+
+def version_without_release(pkg, host, owner, repo, headers):
+    if is_date_version(pkg.get("alt_version", "")):
+        date = latest_commit_date_via_api(owner, repo, headers, host=host)
+        if date:
+            # Keep the same date spelling as ALT for comparisons.
+            separator = "." if "." in pkg["alt_version"] else "-" if "-" in pkg["alt_version"] else ""
+            date = separator.join((date[:4], date[4:6], date[6:]))
+            return date, None, f"https://{host}/{owner}/{repo}/commits"
+    else:
+        result = source_version(pkg, host, owner, repo, headers)
+        if result:
+            pkg["upstream_source"] = True
+            return result[0], None, result[1]
+    return None, f"{host}_no_version:{owner}/{repo}", None
+
+
 def get_upstream_version(pkg):
     """Determine upstream version for a package.
 
@@ -357,11 +471,7 @@ def get_upstream_version(pkg):
             if candidates:
                 tag = max(candidates, key=version_sort_key)
                 return tag.lstrip("v"), None, f"https://github.com/{owner}/{repo}/releases/tag/{tag}"
-            # Fallback: latest commit date (packages versioned by date)
-            date = latest_commit_date_via_api(owner, repo, headers)
-            if date:
-                return date, None, f"https://github.com/{owner}/{repo}/commits"
-            return None, f"github_no_release:{owner}/{repo}", None
+            return version_without_release(pkg, "github.com", owner, repo, headers)
         return None, f"github_parse_fail:{gh_url}", None
 
     # GitLab releases
@@ -381,11 +491,7 @@ def get_upstream_version(pkg):
             if candidates:
                 tag = max(candidates, key=version_sort_key)
                 return tag.lstrip("v"), None, f"https://gitlab.com/{owner}/{repo}/-/releases/{tag}"
-            # Fallback: latest commit date (packages versioned by date)
-            date = latest_commit_date_via_api(owner, repo, {}, host="gitlab.com")
-            if date:
-                return date, None, f"https://gitlab.com/{owner}/{repo}/-/commits"
-            return None, f"gitlab_no_release:{owner}/{repo}", None
+            return version_without_release(pkg, "gitlab.com", owner, repo, {})
         return None, f"gitlab_parse_fail:{gl_url}", None
 
     return None, f"unsupported_source:{url or vcs}", None
@@ -513,6 +619,8 @@ def build_report_segments(outdated, previous_names=None, error_names=None):
                 )
             )
             segments.append((" → ", None, None))
+            if pkg.get("upstream_source"):
+                segments.append(("source: ", None, None))
             if pkg.get("upstream_prerelease"):
                 segments.append(("prerelease: ", None, None))
             segments.append((pkg["upstream_version"], "text_link", pkg.get("upstream_url")))
@@ -795,6 +903,7 @@ def bot(save_state=True):
 
     for i, pkg in enumerate(packages):
         pkg_name = pkg.get("pkg_name", pkg["name"])
+        pkg.pop("upstream_source", None)
         candidates, reason = get_upstream_candidates(pkg)
         newer = {
             channel: candidate for channel, candidate in candidates.items()
@@ -808,6 +917,8 @@ def bot(save_state=True):
             is_outdated = bool(newer)
             status = "<red>OUTDATED</>" if is_outdated else "<green>up to date</>"
             upstream_display = format_upstream_candidates(candidates, pkg["alt_version"])
+            if pkg.get("upstream_source"):
+                upstream_display = upstream_display.replace("stable:", "source:")
             logger.opt(colors=True).debug(
                 f"<white>[{i + 1}/{len(packages)}]</white> "
                 f"<blue>{pkg_name}</blue><white>: "

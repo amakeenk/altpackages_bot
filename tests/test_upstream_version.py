@@ -1,6 +1,7 @@
 """Test detection without loading bot credentials or starting Telegram."""
 import ast
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -10,14 +11,16 @@ def detection_namespace():
 
     source = Path(__file__).resolve().parents[1] / "packages_bot.py"
     tree = ast.parse(source.read_text())
-    names = {"normalize_version", "is_prerelease", "version_sort_key", "get_upstream_version"}
+    names = {"normalize_version", "is_prerelease", "version_sort_key", "get_upstream_version",
+             "version_without_release", "is_date_version"}
     module = ast.Module(
         body=[node for node in tree.body
               if isinstance(node, ast.FunctionDef) and node.name in names],
         type_ignores=[],
     )
     namespace = {
-        "re": re, "github_token": "",
+        "re": re, "github_token": "", "datetime": datetime,
+        "source_version": Mock(return_value=None),
         "fetch_json": Mock(), "latest_tag_via_git": Mock(),
         "latest_commit_date_via_api": Mock(return_value=None),
     }
@@ -66,7 +69,7 @@ class UpstreamVersionTests(unittest.TestCase):
         ns["latest_tag_via_git"].return_value = None
         ns["latest_commit_date_via_api"].return_value = "20260910"
         result = ns["get_upstream_version"]({
-            "name": "example", "vcs": "https://github.com/owner/repo",
+            "name": "example", "alt_version": "20260101", "vcs": "https://github.com/owner/repo",
         })
         self.assertEqual(result, ("20260910", None, "https://github.com/owner/repo/commits"))
 
