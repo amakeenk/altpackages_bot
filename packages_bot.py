@@ -290,9 +290,9 @@ def latest_commit_date_via_api(owner, repo, headers, host="github.com"):
 
         def date_path(c):
             return c.get("commit", {}).get("committer", {}).get("date", "")
-    else:  # gitlab.com
+    else:  # GitLab (gitlab.com or a self-hosted instance)
         api_url = (
-            f"https://gitlab.com/api/v4/projects/{owner}%2F{repo}"
+            f"https://{host}/api/v4/projects/{owner}%2F{repo}"
             "/repository/commits?per_page=1"
         )
 
@@ -360,7 +360,7 @@ def source_version(pkg, host, owner, repo, headers):
             api = f"https://api.github.com/repos/{owner}/{repo}/contents/{encoded}"
         else:
             project = urllib.parse.quote(f"{owner}/{repo}", safe="")
-            api = f"https://gitlab.com/api/v4/projects/{project}/repository/files/{encoded}?ref=HEAD"
+            api = f"https://{host}/api/v4/projects/{project}/repository/files/{encoded}?ref=HEAD"
         data = fetch_json(api, headers=headers)
         if not isinstance(data, dict) or data.get("encoding") != "base64":
             return None
@@ -493,6 +493,25 @@ def get_upstream_version(pkg):
                 return tag.lstrip("v"), None, f"https://gitlab.com/{owner}/{repo}/-/releases/{tag}"
             return version_without_release(pkg, "gitlab.com", owner, repo, {})
         return None, f"gitlab_parse_fail:{gl_url}", None
+
+    # Self-hosted GitLab instances (gitlab.gnome.org, gitlab.freedesktop.org, ...).
+    # Same API shape as gitlab.com; only the host differs.
+    gl_url = vcs or url
+    match = re.search(r"https?://([^/]+)/([^/]+)/([^/]+)", gl_url)
+    if match:
+        host, owner, repo = match.group(1), match.group(2), match.group(3).replace(".git", "").rstrip("/")
+        project = urllib.parse.quote(f"{owner}/{repo}", safe="")
+        data = fetch_json(f"https://{host}/api/v4/projects/{project}/releases")
+        release_tags = (
+            [release.get("tag_name") for release in data if isinstance(release, dict)]
+            if isinstance(data, list) else []
+        )
+        git_tag = latest_tag_via_git(host, owner, repo)
+        candidates = [t for t in (*release_tags, git_tag) if t]
+        if candidates:
+            tag = max(candidates, key=version_sort_key)
+            return tag.lstrip("v"), None, f"https://{host}/{owner}/{repo}/-/releases/{tag}"
+        return version_without_release(pkg, host, owner, repo, {})
 
     return None, f"unsupported_source:{url or vcs}", None
 
