@@ -213,7 +213,12 @@ def is_prerelease(version):
 
 
 def version_sort_key(v):
-    """Comparable sort key from a version string. None sorts lowest."""
+    """Comparable sort key from a version string. None sorts lowest.
+
+    Accepts a version as a string or as an int (EGO extension versions are ints).
+    """
+    if isinstance(v, int):
+        return (1, (v,), 1, ())
     nv = normalize_version(v)
     if nv is None:
         return (0,)
@@ -442,6 +447,22 @@ def get_upstream_version(pkg):
         if data and "info" in data:
             return data["info"].get("version"), None, f"https://pypi.org/project/{pypi_name}/"
         return None, f"pypi_failed:{pypi_name}", None
+
+    # GNOME Shell extensions (extensions.gnome.org) — versioned centrally by EGO,
+    # often without any git tags or releases upstream. The extension-info endpoint
+    # requires a shell_version; the highest supported shell returns the newest build.
+    if "extensions.gnome.org" in url:
+        match = re.search(r"extensions\.gnome\.org/extension/(\d+)", url)
+        if match:
+            pk = match.group(1)
+            for shell in ("51", "50", "49", "48", "47", "46", "45", "44", "43"):
+                data = fetch_json(
+                    f"https://extensions.gnome.org/extension-info/?pk={pk}&shell_version={shell}"
+                )
+                if isinstance(data, dict) and "version" in data:
+                    link = data.get("link", f"/extension/{pk}/")
+                    return str(data["version"]), None, f"https://extensions.gnome.org{link}"
+        return None, f"ego_failed:{url}", None
 
     # crates.io packages
     if "crates.io" in url:

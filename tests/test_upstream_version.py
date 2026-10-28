@@ -72,6 +72,22 @@ class UpstreamVersionTests(unittest.TestCase):
         self.check_detection("gitlab.freedesktop.org", {"message": "not found"},
                              "v2.1.0", "2.1.0", owner="xorg", repo="lib" + "xcb")
 
+    def test_ego_extension_by_pk(self):
+        ns = detection_namespace()
+        ns["fetch_json"].return_value = {
+            "pk": 5592, "version": 12, "link": "/extension/5592/focused-window-d-bus/",
+        }
+        result = ns["get_upstream_version"]({
+            "name": "gnome-shell-extension-focused-window-dbus",
+            "url": "https://extensions.gnome.org/extension/5592/focused-window-d-bus",
+            "vcs": "https://github.com/flexagoon/focused-window-dbus",
+            "alt_version": "8",
+        })
+        self.assertEqual(result, ("12", None, "https://extensions.gnome.org/extension/5592/focused-window-d-bus/"))
+        ns["fetch_json"].assert_called_once_with(
+            "https://extensions.gnome.org/extension-info/?pk=5592&shell_version=51"
+        )
+
     def test_no_sources_uses_commit_fallback(self):
         ns = detection_namespace()
         ns["fetch_json"].return_value = None
