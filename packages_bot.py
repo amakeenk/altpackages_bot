@@ -267,11 +267,13 @@ def compare_versions(v1, v2):
     return version_sort_key(v2) > version_sort_key(v1)
 
 
-def latest_tag_via_git(host, owner, repo, prerelease_only=False, stable_only=False):
+def latest_tag_via_git(host, owner, repo, prerelease_only=False, stable_only=False, version_hint=None):
     """Get latest tag using git protocol — bypasses API rate limits.
 
     Prefers stable tags; only falls back to pre-release tags (rc/beta/alpha...)
-    if no stable tag exists at all.
+    if no stable tag exists at all. When version_hint is given, only tags whose
+    leading numeric components match the hint are considered — this skips
+    auxiliary tags (lsp/v1.7.20231109, @scope/pkg@0.8.0, ...) in monorepos.
     """
     try:
         r = subprocess.run(
@@ -292,6 +294,21 @@ def latest_tag_via_git(host, owner, repo, prerelease_only=False, stable_only=Fal
                     tags.append(tag)
         if not tags:
             return None
+        if version_hint:
+            hint_parts = normalize_version(version_hint) or []
+            hint_nums = [p for p in hint_parts if isinstance(p, int)]
+            if hint_nums:
+                def matches_hint(tag):
+                    parts = normalize_version(version_from_tag(tag)) or []
+                    tag_nums = [p for p in parts if isinstance(p, int)]
+                    if not tag_nums:
+                        return False
+                    # compare up to the length of the hint's numeric prefix
+                    n = min(len(hint_nums), len(tag_nums))
+                    return tag_nums[:n] == hint_nums[:n]
+                matching = [t for t in tags if matches_hint(t)]
+                if matching:
+                    tags = matching
         stable = [t for t in tags if not is_prerelease(t)]
         if prerelease_only:
             pool = [t for t in tags if is_prerelease(t)]
@@ -504,7 +521,7 @@ def get_upstream_version(pkg):
                 headers=headers,
             )
             release_tag = data.get("tag_name") if isinstance(data, dict) else None
-            git_tag = latest_tag_via_git("github.com", owner, repo)
+            git_tag = latest_tag_via_git("github.com", owner, repo, version_hint=pkg.get("alt_version"))
             candidates = [t for t in (release_tag, git_tag) if t]
             if candidates:
                 tag = max(candidates, key=version_sort_key)
@@ -524,7 +541,7 @@ def get_upstream_version(pkg):
                 [release.get("tag_name") for release in data if isinstance(release, dict)]
                 if isinstance(data, list) else []
             )
-            git_tag = latest_tag_via_git("gitlab.com", owner, repo)
+            git_tag = latest_tag_via_git("gitlab.com", owner, repo, version_hint=pkg.get("alt_version"))
             candidates = [t for t in (*release_tags, git_tag) if t]
             if candidates:
                 tag = max(candidates, key=version_sort_key)
@@ -544,7 +561,7 @@ def get_upstream_version(pkg):
             [release.get("tag_name") for release in data if isinstance(release, dict)]
             if isinstance(data, list) else []
         )
-        git_tag = latest_tag_via_git(host, owner, repo)
+        git_tag = latest_tag_via_git(host, owner, repo, version_hint=pkg.get("alt_version"))
         candidates = [t for t in (*release_tags, git_tag) if t]
         if candidates:
             tag = max(candidates, key=version_sort_key)
@@ -583,6 +600,7 @@ def get_upstream_candidates(pkg):
             tag = latest_tag_via_git(
                 host, owner, repo, prerelease_only=channel == "prerelease",
                 stable_only=channel == "stable",
+                version_hint=pkg.get("alt_version"),
             )
             if tag:
                 path = "releases/tag" if host == "github.com" else "-/releases"

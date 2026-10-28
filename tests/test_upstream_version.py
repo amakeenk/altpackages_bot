@@ -42,7 +42,9 @@ class UpstreamVersionTests(unittest.TestCase):
         self.assertIsNone(result[1])
         if expected:
             self.assertTrue(result[2].endswith(expected) or result[2].endswith(f"v{expected}"))
-        ns["latest_tag_via_git"].assert_called_once_with(host, owner, repo)
+        ns["latest_tag_via_git"].assert_called_once()
+        args, kwargs = ns["latest_tag_via_git"].call_args
+        self.assertEqual(args[:3], (host, owner, repo))
 
     def test_github_sources(self):
         for release, tag, expected in [
