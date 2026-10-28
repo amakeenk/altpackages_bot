@@ -11,7 +11,8 @@ class PrereleaseVersionTests(unittest.TestCase):
         source = Path(__file__).resolve().parents[1] / "packages_bot.py"
         tree = ast.parse(source.read_text())
         names = {"normalize_version", "is_prerelease", "version_sort_key",
-                 "compare_versions", "get_upstream_candidates", "format_upstream_candidates"}
+                 "compare_versions", "get_upstream_candidates", "format_upstream_candidates",
+                 "version_from_tag"}
         module = ast.Module(body=[n for n in tree.body
                                   if isinstance(n, ast.FunctionDef) and n.name in names],
                             type_ignores=[])

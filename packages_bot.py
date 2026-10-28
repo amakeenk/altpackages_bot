@@ -181,7 +181,11 @@ def fetch_json(url, headers=None):
 
 
 def normalize_version(v):
-    """Normalize version string for comparison."""
+    """Normalize version string for comparison.
+
+    Handles prefixed tags like 'v1.2.3', 'release-1.2.3' and scoped npm-style
+    tags like '@scope/pkg@1.2.3' or 'pkg@1.2.3'.
+    """
     if not v or v == "%version":
         return None
     v = v.strip().lower()
@@ -203,6 +207,19 @@ def normalize_version(v):
             else:
                 result.append(p)
     return result
+
+
+def version_from_tag(tag):
+    """Extract a bare version string from a git tag or release name.
+
+    Strips common prefixes including scoped npm-style tags:
+      'v1.2.3' -> '1.2.3'
+      '@scope/pkg@1.2.3' -> '1.2.3'
+      'release-2.0.0' -> '2.0.0'
+    Returns the original tag if no numeric version is found.
+    """
+    m = re.search(r"(\d+(?:[.\-_][0-9A-Za-z]+)*(?:\+[0-9A-Za-z.\-_]+)?)$", tag)
+    return m.group(1) if m else tag
 
 
 def is_prerelease(version):
@@ -491,7 +508,7 @@ def get_upstream_version(pkg):
             candidates = [t for t in (release_tag, git_tag) if t]
             if candidates:
                 tag = max(candidates, key=version_sort_key)
-                return tag.lstrip("v"), None, f"https://github.com/{owner}/{repo}/releases/tag/{tag}"
+                return version_from_tag(tag), None, f"https://github.com/{owner}/{repo}/releases/tag/{tag}"
             return version_without_release(pkg, "github.com", owner, repo, headers)
         return None, f"github_parse_fail:{gh_url}", None
 
@@ -511,7 +528,7 @@ def get_upstream_version(pkg):
             candidates = [t for t in (*release_tags, git_tag) if t]
             if candidates:
                 tag = max(candidates, key=version_sort_key)
-                return tag.lstrip("v"), None, f"https://gitlab.com/{owner}/{repo}/-/releases/{tag}"
+                return version_from_tag(tag), None, f"https://gitlab.com/{owner}/{repo}/-/releases/{tag}"
             return version_without_release(pkg, "gitlab.com", owner, repo, {})
         return None, f"gitlab_parse_fail:{gl_url}", None
 
@@ -531,7 +548,7 @@ def get_upstream_version(pkg):
         candidates = [t for t in (*release_tags, git_tag) if t]
         if candidates:
             tag = max(candidates, key=version_sort_key)
-            return tag.lstrip("v"), None, f"https://{host}/{owner}/{repo}/-/releases/{tag}"
+            return version_from_tag(tag), None, f"https://{host}/{owner}/{repo}/-/releases/{tag}"
         return version_without_release(pkg, host, owner, repo, {})
 
     return None, f"unsupported_source:{url or vcs}", None
@@ -550,7 +567,7 @@ def get_upstream_candidates(pkg):
         channel = "prerelease" if is_prerelease(value) else "stable"
         current = candidates[channel]
         if current is None or version_sort_key(value) > version_sort_key(current[0]):
-            candidates[channel] = (value.lstrip("v"), link)
+            candidates[channel] = (version_from_tag(value), link)
 
     add(version, url)
     package_url = pkg.get("url", "")

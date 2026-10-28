@@ -12,7 +12,7 @@ def detection_namespace():
     source = Path(__file__).resolve().parents[1] / "packages_bot.py"
     tree = ast.parse(source.read_text())
     names = {"normalize_version", "is_prerelease", "version_sort_key", "get_upstream_version",
-             "version_without_release", "is_date_version"}
+             "version_without_release", "is_date_version", "version_from_tag"}
     module = ast.Module(
         body=[node for node in tree.body
               if isinstance(node, ast.FunctionDef) and node.name in names],
@@ -41,7 +41,7 @@ class UpstreamVersionTests(unittest.TestCase):
         self.assertEqual(result[0], expected)
         self.assertIsNone(result[1])
         if expected:
-            self.assertTrue(result[2].endswith(f"/v{expected}"))
+            self.assertTrue(result[2].endswith(expected) or result[2].endswith(f"v{expected}"))
         ns["latest_tag_via_git"].assert_called_once_with(host, owner, repo)
 
     def test_github_sources(self):
@@ -87,6 +87,11 @@ class UpstreamVersionTests(unittest.TestCase):
         ns["fetch_json"].assert_called_once_with(
             "https://extensions.gnome.org/extension-info/?pk=5592&shell_version=51"
         )
+
+    def test_scoped_npm_tag_biome(self):
+        self.check_detection("github.com", {"tag_name": "@biomejs/biome@2.6.3"},
+                             "@biomejs/biome@2.6.3", "2.6.3",
+                             owner="biomejs", repo="biome")
 
     def test_no_sources_uses_commit_fallback(self):
         ns = detection_namespace()
